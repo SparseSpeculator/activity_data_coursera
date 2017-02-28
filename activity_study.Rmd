@@ -1,0 +1,118 @@
+---
+title: "Activity Data Analysis"
+author: "Sebastian Ruecker"
+date: "28 Februar 2017"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+In the following document we will process and analyze a small data set containing the number of steps taken per time interval. The steps were measured via a personal mobile device and are all from the same subject.
+
+# Data Preparation
+
+First we load the required packages and load the data. We generate the weekday and a variable denoting the weekend. We then take a look at the first couple of rows.
+
+```{r}
+rm(list = ls()) 
+Sys.setenv(LANG = "en")
+Sys.setlocale("LC_TIME", "English")
+wd <- "C:/Users/Sebastian/Documents/Coursera/Johns Hopkins - Data Science/5 Reproducible Research"
+setwd(wd)
+
+require("downloader")
+require("ggplot2")
+require("dplyr")
+
+url <- "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2Factivity.zip"
+download(url, dest="./data/dataset.zip", mode="wb") 
+unzip ("./data/dataset.zip", exdir = "./data")
+file.remove("./data/dataset.zip")
+activity <- read.csv("./data/activity.csv")
+activity$date <- as.Date(activity$date)
+activity$weekday <- weekdays(activity$date)
+activity$weekend <- activity$weekday %in% c("Sunday", "Saturday")
+summary(activity)
+head(activity)
+```
+
+# Total number of steps taken per day
+
+We see from the histogram, that the steps per day lie mostly between 5000 and 1500.
+
+```{r}
+activity_by_day <- group_by(activity, date) %>% summarize(steps=sum(steps, na.rm=TRUE), avg_steps=mean(steps, na.rm=TRUE))
+ggplot(data=activity_by_day, mapping=aes(x = date, y=steps)) + geom_bar(stat="identity")
+```
+
+# Mean and median number of steps per day
+
+Next we will have a look at the mean and median number of steps taken each day.
+```{r}
+summary(activity_by_day[,2])
+```
+Some days appear to have no activity. This may be due to missing values or extreme laziness on the part of the subject.
+
+# Average number of steps taken
+When we look at the average number of steps per day, we see that the number varies quite a lot. It is unclear, how much of the downward outliers are due to missing values.
+```{r}
+ggplot(data=activity_by_day, mapping=aes(x = date, y=avg_steps)) + geom_line()
+```
+
+# 5-minute interval with maximum average number of steps
+
+Next we identify the 5-minute interval in which the average number of steps over all days was greatest. 
+```{r}
+activity_by_interval <- group_by(activity, interval) %>% summarize(avg_steps=mean(steps, na.rm=TRUE))
+activity_by_interval$interval[which.max(activity_by_interval$avg_steps)]
+```
+
+# Missing data treatment
+
+As mentioned above, missing data may be skewing our plots. Lets have a look which columns contain missing values and how many such values there are. 
+```{r}
+apply(activity, 2, FUN=function(x) any(is.na(x)))
+mean(is.na(activity$steps))
+```
+As we see, a good 13% of steps are missing. We will impute these values by the following method:
+
+1. group the data by weekday and interval
+2. take median over grouped data  
+3. fill missing values by using the median of the matching group
+
+This way, we use the most commonly occurring number of steps per weekday and time interval as an estimation for the missing data points. We hope that this method is more robust than using the mean and more exact than using the median over the whole set.
+
+```{r}
+activity_by_day_interval <- group_by(activity, weekday, interval) %>% 
+  summarize(med_steps=median(steps, na.rm=TRUE)) %>% 
+  mutate(day_interval = paste(weekday, interval, sep="")) 
+na_idx <- which(is.na(activity$steps))
+median_values <- activity_by_day_interval$med_steps
+names(median_values) <- activity_by_day_interval$day_interval
+activity_padded <- activity
+activity_padded$steps[na_idx] <- median_values[paste(activity$weekday[na_idx], activity$interval[na_idx], sep="")]
+apply(activity_padded, 2, FUN=function(x) any(is.na(x)))
+```
+
+# Total number of steps after missing values are imputed
+
+Next, we will have a look at the data after missing values have been treated. As we can see, the missing values made the steps seem artificially low in some cases.  
+```{r}
+activity_by_day_padded <- group_by(activity_padded, date) %>% summarize(steps=sum(steps, na.rm=TRUE), avg_steps=mean(steps, na.rm=TRUE))
+ggplot(data=activity_by_day_padded, mapping=aes(x = date, y=steps)) + geom_bar(stat="identity")
+```
+
+# Comparing the average number of steps taken per 5-minute interval across weekdays and weekends
+Finally, we compare the average steps taken per interval during the week with those during the weekend. The weekend less spikes in steps. One might hypothesize, that the measured individual is lazier during the weekends, but more research would have to be conducted in order to be sure.
+```{r}
+activity_by_intervall_weekend <- group_by(activity_padded, interval, weekend) %>% summarize(avg_steps=mean(steps))
+activity_by_intervall_weekend$weekend <- ifelse(activity_by_intervall_weekend$weekend, "weekend", "weekday")
+ggplot(data=activity_by_intervall_weekend, mapping=aes(x = interval, y=avg_steps)) + 
+  geom_bar(stat="identity") + 
+  facet_wrap(~ weekend)  
+
+```
